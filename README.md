@@ -1,2 +1,4 @@
 # go_localCache
-a localCache for Golang
+目前支持如下两种缓存淘汰算法
+* LRU
+* LFU
