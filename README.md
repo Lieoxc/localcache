@@ -1,2 +1,5 @@
 # go_localCache
-a localCache for Golang
+1. 较高的读写性能和命中率
+2. 支持按写入时间过期
+3. 支持淘汰策略
+4. 降低GC
