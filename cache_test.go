@@ -48,3 +48,23 @@ func (h *cacheTestSuite) TestLen() {
 	assert.Equal(h.T(), 1000, length)
 	h.T().Logf("length == %d", length)
 }
+
+func (h *cacheTestSuite) TestDel() {
+	cache, err := NewLocalCache()
+	assert.Equal(h.T(), nil, err)
+	key := "lxc"
+	value := []byte("mycache")
+
+	err = cache.Set(key, value)
+	assert.Equal(h.T(), nil, err)
+
+	res, err := cache.Get(key)
+	assert.Equal(h.T(), nil, err)
+	assert.Equal(h.T(), value, res)
+	h.T().Logf("res == %s", string(res))
+	err = cache.Del(key)
+	assert.Equal(h.T(), nil, err)
+
+	_, err = cache.Get(key)
+	assert.Equal(h.T(), ErrEntryNotFound, err)
+}

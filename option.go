@@ -6,6 +6,7 @@ const (
 	defaultBucketCount = 256
 	defaultMaxBytes    = 512 * 1024 * 1024 // 512M
 	defaultCleanTIme   = time.Minute * 10
+	defaultExpireTime  = 10 * time.Minute
 )
 
 type options struct {

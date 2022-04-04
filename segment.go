@@ -3,15 +3,16 @@ package localcache
 import (
 	"encoding/binary"
 	"errors"
+	"time"
 )
 
 const (
-	chunkSize    = 16 * 1024 //每个分片16kB
-	defaultIndex = 0
-
-	hashSizeInBytes    = 8                                // Number of bytes used for hash
-	keySizeInBytes     = 2                                // Number of bytes used for size of entry key
-	headersSizeInBytes = hashSizeInBytes + keySizeInBytes // Number of bytes used for all headers
+	chunkSize            = 16 * 1024 //每个分片16kB
+	defaultIndex         = 0
+	timestampSizeInBytes = 8
+	hashSizeInBytes      = 8                                                       // Number of bytes used for hash
+	keySizeInBytes       = 2                                                       // Number of bytes used for size of entry key
+	headersSizeInBytes   = timestampSizeInBytes + hashSizeInBytes + keySizeInBytes // Number of bytes used for all headers
 
 )
 
@@ -22,7 +23,6 @@ type segment struct {
 }
 
 func newSegment(bytes uint64) *segment {
-
 	capacity := (bytes + chunkSize - 1) / chunkSize
 	chunks := make([][]byte, capacity)
 
@@ -32,12 +32,28 @@ func newSegment(bytes uint64) *segment {
 		index:   defaultIndex,
 	}
 }
-func (s *segment) set(key string, hashKey uint64, value []byte) error {
+func (s *segment) clean(timestamp int64) {
+	count := []int{}
+	for i := range count {
+		entry := s.chunks[i]
+		if entry == nil {
+			continue
+		}
+		expireTime := readExpireAtFromEntry(entry)
+		if timestamp-int64(expireTime) >= 0 {
+			hash := readHashFromEntry(entry)
+			s.removeChunks(i)
+			delete(s.hashmap, hash)
+		}
+	}
+}
+func (s *segment) set(key string, hashKey uint64, value []byte, expireTime time.Duration) error {
 	if index, ok := s.hashmap[hashKey]; ok {
-		s.removeChunks(index)
+		s.removeChunks(int(index))
 		delete(s.hashmap, hashKey)
 	}
-	entry := wrapEntry(key, hashKey, value)
+	expireAt := time.Now().Add(expireTime).Unix()
+	entry := wrapEntry(expireAt, key, hashKey, value)
 	index, err := s.push(entry)
 	if err == nil {
 		s.hashmap[hashKey] = uint32(index)
@@ -56,11 +72,19 @@ func (s *segment) get(key string, hashKey uint64) ([]byte, error) {
 	}
 	return res, nil
 }
-
+func (s *segment) del(hashKey uint64) error {
+	index, ok := s.hashmap[hashKey]
+	if !ok {
+		return nil
+	}
+	s.removeChunks(int(index))
+	delete(s.hashmap, hashKey)
+	return nil
+}
 func (s *segment) len() int {
 	return len(s.hashmap)
 }
-func (s *segment) removeChunks(index uint32) {
+func (s *segment) removeChunks(index int) {
 	s.chunks[index] = nil
 }
 func (s *segment) push(data []byte) (uint64, error) {
@@ -88,16 +112,19 @@ func (s *segment) getEntry(key string, hashKey uint64) ([]byte, error) {
 }
 
 func readKeyFromEntry(data []byte) string {
-	length := binary.LittleEndian.Uint16(data[hashSizeInBytes:])
+	length := binary.LittleEndian.Uint16(data[timestampSizeInBytes+hashSizeInBytes:])
 
 	dst := make([]byte, length)
 	//拷贝key
 	copy(dst, data[headersSizeInBytes:headersSizeInBytes+length])
 	return bytesToString(dst)
 }
+func readHashFromEntry(data []byte) uint64 {
+	return binary.LittleEndian.Uint64(data[timestampSizeInBytes:])
+}
 
 func readEntry(data []byte) []byte {
-	length := binary.LittleEndian.Uint16(data[hashSizeInBytes:])
+	length := binary.LittleEndian.Uint16(data[timestampSizeInBytes+hashSizeInBytes:])
 
 	dst := make([]byte, len(data)-int(length+headersSizeInBytes))
 	//拷贝数据段
@@ -105,13 +132,18 @@ func readEntry(data []byte) []byte {
 
 	return dst
 }
-func wrapEntry(key string, hashKey uint64, value []byte) []byte {
+
+func readExpireAtFromEntry(data []byte) uint64 {
+	return binary.LittleEndian.Uint64(data)
+}
+
+func wrapEntry(timestamp int64, key string, hashKey uint64, value []byte) []byte {
 	keyLen := len(key)
 	blobLength := len(value) + keyLen + headersSizeInBytes
 	blob := make([]byte, blobLength)
-
-	binary.LittleEndian.PutUint64(blob, hashKey)
-	binary.LittleEndian.PutUint16(blob[hashSizeInBytes:], uint16(keyLen))
+	binary.LittleEndian.PutUint64(blob, uint64(timestamp))
+	binary.LittleEndian.PutUint64(blob[timestampSizeInBytes:], hashKey)
+	binary.LittleEndian.PutUint16(blob[timestampSizeInBytes+hashSizeInBytes:], uint16(keyLen))
 	copy(blob[headersSizeInBytes:], key)
 	copy(blob[headersSizeInBytes+keyLen:], value)
 

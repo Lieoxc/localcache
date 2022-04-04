@@ -3,6 +3,7 @@ package localcache
 import (
 	"errors"
 	"sync"
+	"time"
 )
 
 var (
@@ -26,7 +27,7 @@ func NewLocalCache(opts ...Opt) (*Cache, error) {
 		bucketCount:    defaultBucketCount,
 		maxBytes:       defaultMaxBytes,
 		cleanTime:      defaultCleanTIme,
-		cleanupEnabled: false,
+		cleanupEnabled: true,
 	}
 	for _, each := range opts {
 		each(options)
@@ -47,16 +48,42 @@ func NewLocalCache(opts ...Opt) (*Cache, error) {
 		locks:       make([]sync.Mutex, options.bucketCount),
 		close:       make(chan struct{}),
 	}
+	if options.cleanupEnabled {
+		go cache.clean(options.cleanTime)
+	}
 	return cache, nil
 }
-
+func (c *Cache) clean(cleanTime time.Duration) {
+	ticker := time.NewTicker(cleanTime)
+	defer ticker.Stop()
+	for {
+		select {
+		case t := <-ticker.C:
+			for index := 0; index < int(c.bucketCount); index++ {
+				c.locks[index].Lock()
+				c.segments[index].clean(t.Unix())
+				c.locks[index].Unlock()
+			}
+		case <-c.close:
+			return
+		}
+	}
+}
 func (c *Cache) Set(key string, value []byte) error {
 	hashKey := c.hashFunc.Sum64(key)
 	index := hashKey & c.bucketMask
 	c.locks[index].Lock()
 	defer c.locks[index].Unlock()
-	c.segments[index].set(key, hashKey, value)
+	c.segments[index].set(key, hashKey, value, defaultExpireTime)
 	return nil
+}
+func (c *Cache) Del(key string) error {
+	hashKey := c.hashFunc.Sum64(key)
+	index := hashKey & c.bucketMask
+	c.locks[index].Lock()
+	defer c.locks[index].Unlock()
+	err := c.segments[index].del(hashKey)
+	return err
 }
 func (c *Cache) Get(key string) ([]byte, error) {
 	hashKey := c.hashFunc.Sum64(key)
